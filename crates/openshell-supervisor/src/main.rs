@@ -282,45 +282,15 @@ fn arm_parent_liveness(enabled: bool) -> Result<()> {
     Ok(())
 }
 
-/// The descriptor payload the backend expects. For the built-in runtime, a
-/// protobuf JSON descriptor beside the legacy file is preferred and re-encoded
-/// as the legacy payload, which the rest of the launch still uses. The payload
-/// of any other backend is opaque and read as it is.
-fn backend_descriptor_payload(path: &Path, admitted_backend: &str) -> Result<Vec<u8>> {
-    use openshell_driver_sdk::legacy_contract::{
-        BUILTIN_BACKEND_NAME, ContractDocument as _, SandboxRuntimeDescriptor, protobuf_json_path,
-    };
-    if admitted_backend == BUILTIN_BACKEND_NAME {
-        let preferred = protobuf_json_path(path);
-        match std::fs::read(&preferred) {
-            Ok(bytes) => {
-                return SandboxRuntimeDescriptor::from_protobuf_json(&bytes)
-                    .and_then(|descriptor| descriptor.to_legacy_json())
-                    .map_err(|error| {
-                        miette::miette!(
-                            "decode backend descriptor {}: {error}",
-                            preferred.display()
-                        )
-                    });
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(miette::miette!(
-                    "read backend descriptor {}: {error}",
-                    preferred.display()
-                ));
-            }
-        }
-    }
-    std::fs::read(path)
-        .map_err(|error| miette::miette!("read backend descriptor {}: {error}", path.display()))
-}
-
 fn backend_descriptor(args: &Args, admitted_backend: &str) -> Result<BackendDescriptor> {
     let path = args.backend_descriptor_file.as_deref().ok_or_else(|| {
         miette::miette!("--backend-descriptor-file is required for --role=isolation-backend")
     })?;
-    let payload = backend_descriptor_payload(path, admitted_backend)?;
+    // The built-in runtime prefers a protobuf JSON descriptor beside the legacy
+    // file; any other backend's payload is opaque.
+    let payload =
+        openshell_driver_sdk::legacy_contract::read_descriptor_payload(path, admitted_backend)
+            .map_err(|error| miette::miette!("read backend descriptor: {error}"))?;
     Ok(BackendDescriptor {
         backend_name: admitted_backend.to_string(),
         payload,
@@ -1317,101 +1287,6 @@ mod tests {
         );
         assert!(error.is_none(), "unexpected setup error: {error:?}");
         export.expect("OCSF export").shutdown().await;
-    }
-
-    const LEGACY_DESCRIPTOR: &str = include_str!(
-        "../../openshell-driver-sdk/tests/legacy_contract/examples/SandboxRuntimeDescriptor.tcp.json"
-    );
-    const PROTOBUF_DESCRIPTOR: &str = include_str!(
-        "../../openshell-driver-sdk/tests/legacy_contract/proto_json/SandboxRuntimeDescriptor.tcp.json"
-    );
-
-    fn descriptor_args(path: &Path) -> Args {
-        let auth_bundle = path.with_file_name("auth.json");
-        std::fs::write(&auth_bundle, [0]).expect("write auth bundle payload");
-        Args::try_parse_from([
-            "openshell-supervisor",
-            "--backend-descriptor-file",
-            path.to_str().expect("UTF-8 descriptor path"),
-            "--auth-bundle-file",
-            auth_bundle.to_str().expect("UTF-8 auth bundle path"),
-        ])
-        .expect("supervisor arguments")
-    }
-
-    #[test]
-    fn built_in_descriptor_prefers_the_protobuf_json_file() {
-        let directory = tempfile::tempdir().unwrap();
-        let legacy = directory.path().join("runtime-descriptor.json");
-        // The legacy file names a different boundary, so the source is visible.
-        let mut other: serde_json::Value = serde_json::from_str(LEGACY_DESCRIPTOR).unwrap();
-        other["boundary_id"] = serde_json::json!("from-the-legacy-file");
-        std::fs::write(&legacy, other.to_string()).unwrap();
-        std::fs::write(
-            directory.path().join("runtime-descriptor.pb.json"),
-            PROTOBUF_DESCRIPTOR,
-        )
-        .unwrap();
-        let payload = backend_descriptor(
-            &descriptor_args(&legacy),
-            openshell_sandbox_backend::BACKEND_NAME,
-        )
-        .unwrap()
-        .payload;
-        // The payload is the legacy encoding of the protobuf JSON descriptor.
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&payload).unwrap(),
-            serde_json::from_str::<serde_json::Value>(LEGACY_DESCRIPTOR).unwrap()
-        );
-    }
-
-    #[test]
-    fn built_in_descriptor_falls_back_to_the_legacy_file() {
-        let directory = tempfile::tempdir().unwrap();
-        let legacy = directory.path().join("runtime-descriptor.json");
-        std::fs::write(&legacy, LEGACY_DESCRIPTOR).unwrap();
-        let payload = backend_descriptor(
-            &descriptor_args(&legacy),
-            openshell_sandbox_backend::BACKEND_NAME,
-        )
-        .unwrap()
-        .payload;
-        assert_eq!(payload, LEGACY_DESCRIPTOR.as_bytes());
-    }
-
-    #[test]
-    fn an_invalid_protobuf_json_descriptor_is_an_error_not_a_fallback() {
-        let directory = tempfile::tempdir().unwrap();
-        let legacy = directory.path().join("runtime-descriptor.json");
-        std::fs::write(&legacy, LEGACY_DESCRIPTOR).unwrap();
-        std::fs::write(
-            directory.path().join("runtime-descriptor.pb.json"),
-            r#"{"unexpected":true}"#,
-        )
-        .unwrap();
-        assert!(
-            backend_descriptor(
-                &descriptor_args(&legacy),
-                openshell_sandbox_backend::BACKEND_NAME,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn an_external_backends_descriptor_is_read_as_it_is() {
-        let directory = tempfile::tempdir().unwrap();
-        let legacy = directory.path().join("runtime-descriptor.json");
-        std::fs::write(&legacy, b"opaque backend payload").unwrap();
-        std::fs::write(
-            directory.path().join("runtime-descriptor.pb.json"),
-            PROTOBUF_DESCRIPTOR,
-        )
-        .unwrap();
-        let payload = backend_descriptor(&descriptor_args(&legacy), "openshell-mxc")
-            .unwrap()
-            .payload;
-        assert_eq!(payload, b"opaque backend payload");
     }
 
     #[test]

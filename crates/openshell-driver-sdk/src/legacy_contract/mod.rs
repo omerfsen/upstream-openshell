@@ -49,6 +49,9 @@ pub mod identity;
 #[cfg(feature = "legacy-contract")]
 pub use boundary::*;
 #[cfg(feature = "legacy-contract")]
-pub use document::{ContractDocument, ContractDocumentError, protobuf_json_path, read_document};
+pub use document::{
+    ContractDocument, ContractDocumentError, DocumentFile, DocumentFiles, protobuf_json_file_name,
+    protobuf_json_path, read_descriptor_payload, read_document,
+};
 #[cfg(feature = "legacy-contract")]
 pub use identity::*;

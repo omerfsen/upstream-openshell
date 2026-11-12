@@ -47,20 +47,49 @@ fn pool() -> &'static DescriptorPool {
     })
 }
 
+/// The name of the protobuf JSON file that sits beside the legacy file named
+/// `legacy`: `.pb.json` in place of `.json`, or appended when the name has no
+/// `.json` ending.
+#[must_use]
+pub fn protobuf_json_file_name(legacy: &str) -> String {
+    legacy.strip_suffix(".json").map_or_else(
+        || format!("{legacy}.pb.json"),
+        |stem| format!("{stem}.pb.json"),
+    )
+}
+
 /// The path of the protobuf JSON file that sits beside `legacy`.
 #[must_use]
 pub fn protobuf_json_path(legacy: &Path) -> PathBuf {
-    let mut name = legacy
+    let name = legacy
         .file_name()
-        .map(std::ffi::OsString::from)
+        .map(|name| protobuf_json_file_name(&name.to_string_lossy()))
         .unwrap_or_default();
-    let text = name.to_string_lossy();
-    let renamed = text.strip_suffix(".json").map_or_else(
-        || format!("{text}.pb.json"),
-        |stem| format!("{stem}.pb.json"),
-    );
-    name = renamed.into();
     legacy.with_file_name(name)
+}
+
+/// One file of a document: its name and its contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentFile {
+    pub name: String,
+    pub contents: Vec<u8>,
+}
+
+/// Both files of one document, encoded from the same value so they cannot
+/// disagree. A driver writes both, by whatever means it uses to deliver files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentFiles {
+    /// The legacy JSON file.
+    pub legacy: DocumentFile,
+    /// The protobuf JSON file beside it.
+    pub protobuf: DocumentFile,
+}
+
+impl DocumentFiles {
+    /// Both files, legacy first.
+    pub fn iter(&self) -> impl Iterator<Item = &DocumentFile> {
+        [&self.legacy, &self.protobuf].into_iter()
+    }
 }
 
 fn encode<M: prost::Message>(
@@ -112,6 +141,22 @@ pub trait ContractDocument: Sized + Serialize + DeserializeOwned {
     fn to_legacy_json(&self) -> Result<Vec<u8>, ContractConversionError> {
         serde_json::to_vec(self)
             .map_err(|_| ContractConversionError::new("the document cannot be written as JSON"))
+    }
+
+    /// Encode this document in both forms. `legacy_name` is the name of the
+    /// legacy file, such as `bootstrap.json`; the protobuf JSON file's name
+    /// follows from it.
+    fn to_files(&self, legacy_name: &str) -> Result<DocumentFiles, ContractConversionError> {
+        Ok(DocumentFiles {
+            legacy: DocumentFile {
+                name: legacy_name.to_string(),
+                contents: self.to_legacy_json()?,
+            },
+            protobuf: DocumentFile {
+                name: protobuf_json_file_name(legacy_name),
+                contents: self.to_protobuf_json()?,
+            },
+        })
     }
 }
 
@@ -171,5 +216,42 @@ pub fn read_document<T: ContractDocument>(legacy: &Path) -> Result<T, ContractDo
     serde_json::from_slice(&bytes).map_err(|error| ContractDocumentError::Decode {
         path: legacy.to_path_buf(),
         message: error.to_string(),
+    })
+}
+
+/// The descriptor payload an isolation backend is given, read from the file
+/// `legacy`.
+///
+/// For the built-in runtime a protobuf JSON descriptor beside the legacy file is
+/// preferred and re-encoded as the legacy payload, which the rest of the launch
+/// still uses; an invalid protobuf JSON descriptor is an error, not a fallback.
+/// The payload of any other backend is opaque and is read as it is.
+pub fn read_descriptor_payload(
+    legacy: &Path,
+    backend_name: &str,
+) -> Result<Vec<u8>, ContractDocumentError> {
+    if backend_name == super::BUILTIN_BACKEND_NAME {
+        let preferred = protobuf_json_path(legacy);
+        match std::fs::read(&preferred) {
+            Ok(bytes) => {
+                return SandboxRuntimeDescriptor::from_protobuf_json(&bytes)
+                    .and_then(|descriptor| descriptor.to_legacy_json())
+                    .map_err(|error| ContractDocumentError::Decode {
+                        path: preferred,
+                        message: error.to_string(),
+                    });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(ContractDocumentError::Io {
+                    path: preferred,
+                    source,
+                });
+            }
+        }
+    }
+    std::fs::read(legacy).map_err(|source| ContractDocumentError::Io {
+        path: legacy.to_path_buf(),
+        source,
     })
 }
