@@ -2353,7 +2353,10 @@ fn parse_tcp_forward_spec(local: Option<&str>, default_port: u16) -> Result<(Str
             if addr.is_empty() {
                 return Err(miette::miette!("bind address is required before ':'"));
             }
-            return Ok((addr.to_string(), port));
+            return Ok((
+                openshell_core::forward::unbracket_ipv6_host(addr).to_string(),
+                port,
+            ));
         }
     }
 
@@ -7136,13 +7139,38 @@ mod tests {
         format_endpoint, format_log_line, forward_requires_session_token, git_sync_files,
         has_main_process_result, parse_cli_setting_value, parse_credential_expiry_cli_value,
         parse_driver_config_json, parse_env_from_pairs, parse_secret_material_env_pairs,
-        policy_revision_list_json, policy_revision_to_json, proto_execution_timeout,
-        provisioning_timeout_message, ready_false_condition_message, relay_local_socket,
-        resolve_from, rootfs_tar_sources_supported_for_gateway, sandbox_should_persist,
-        sandbox_upload_plan, service_endpoint_to_json, service_status_error,
-        service_url_for_gateway, workspace_member_to_json,
+        parse_tcp_forward_spec, policy_revision_list_json, policy_revision_to_json,
+        proto_execution_timeout, provisioning_timeout_message, ready_false_condition_message,
+        relay_local_socket, resolve_from, rootfs_tar_sources_supported_for_gateway,
+        sandbox_should_persist, sandbox_upload_plan, service_endpoint_to_json,
+        service_status_error, service_url_for_gateway, workspace_member_to_json,
     };
     use openshell_core::proto::TcpForwardFrame;
+
+    #[test]
+    fn parse_tcp_forward_spec_accepts_ipv4_ipv6_and_port_only() {
+        assert_eq!(
+            parse_tcp_forward_spec(None, 8080).unwrap(),
+            ("127.0.0.1".to_string(), 8080)
+        );
+        assert_eq!(
+            parse_tcp_forward_spec(Some("9000"), 8080).unwrap(),
+            ("127.0.0.1".to_string(), 9000)
+        );
+        assert_eq!(
+            parse_tcp_forward_spec(Some("0.0.0.0:9000"), 8080).unwrap(),
+            ("0.0.0.0".to_string(), 9000)
+        );
+        assert_eq!(
+            parse_tcp_forward_spec(Some("::1:9000"), 8080).unwrap(),
+            ("::1".to_string(), 9000)
+        );
+        assert_eq!(
+            parse_tcp_forward_spec(Some("[::1]:9000"), 8080).unwrap(),
+            ("::1".to_string(), 9000)
+        );
+        assert!(parse_tcp_forward_spec(Some(":9000"), 8080).is_err());
+    }
 
     #[test]
     fn lifecycle_wait_fails_fast_on_phases_that_block_the_target() {

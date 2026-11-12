@@ -667,6 +667,7 @@ impl ForwardSpec {
     /// - `"8080"` → `ForwardSpec { bind_addr: "127.0.0.1", port: 8080 }`
     /// - `"0.0.0.0:8080"` → `ForwardSpec { bind_addr: "0.0.0.0", port: 8080 }`
     /// - `"::1:8080"` → `ForwardSpec { bind_addr: "::1", port: 8080 }`
+    /// - `"[::1]:8080"` → `ForwardSpec { bind_addr: "::1", port: 8080 }`
     pub fn parse(s: &str) -> Result<Self> {
         // Split on the last ':' to handle IPv6 addresses like "::1:8080".
         if let Some(pos) = s.rfind(':') {
@@ -677,7 +678,7 @@ impl ForwardSpec {
                     return Err(miette::miette!("port must be between 1 and 65535"));
                 }
                 return Ok(Self {
-                    bind_addr: addr.to_string(),
+                    bind_addr: unbracket_ipv6_host(addr).to_string(),
                     port,
                 });
             }
@@ -899,6 +900,19 @@ fn bracket_ipv6_host(host: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(host)
     }
+}
+
+/// Strip the brackets from a bracketed IPv6 literal (`[::1]` → `::1`).
+///
+/// Bind addresses are passed to socket APIs that only accept a bare IP or a
+/// host name, so the SSH-style `[::1]:8080` form must lose its brackets
+/// before use. Anything else, including a bracketed non-IPv6 value, is
+/// returned unchanged.
+pub fn unbracket_ipv6_host(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .filter(|inner| inner.parse::<std::net::Ipv6Addr>().is_ok())
+        .unwrap_or(host)
 }
 
 /// Format a gateway URL, bracketing IPv6 literals when needed.
@@ -1593,6 +1607,28 @@ mod tests {
         let spec = ForwardSpec::parse("::1:8080").unwrap();
         assert_eq!(spec.bind_addr, "::1");
         assert_eq!(spec.port, 8080);
+    }
+
+    #[test]
+    fn forward_spec_parse_bracketed_ipv6_and_port() {
+        let spec = ForwardSpec::parse("[::1]:8080").unwrap();
+        assert_eq!(spec.bind_addr, "::1");
+        assert_eq!(spec.port, 8080);
+        assert_eq!(spec.ssh_forward_arg(), "[::1]:8080:127.0.0.1:8080");
+        assert_eq!(spec.access_url(), "http://[::1]:8080/");
+
+        let spec = ForwardSpec::parse("[::]:8080").unwrap();
+        assert_eq!(spec.bind_addr, "::");
+        assert_eq!(spec.access_url(), "http://localhost:8080/");
+    }
+
+    #[test]
+    fn unbracket_ipv6_host_only_strips_ipv6_literals() {
+        assert_eq!(unbracket_ipv6_host("[::1]"), "::1");
+        assert_eq!(unbracket_ipv6_host("::1"), "::1");
+        assert_eq!(unbracket_ipv6_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(unbracket_ipv6_host("[127.0.0.1]"), "[127.0.0.1]");
+        assert_eq!(unbracket_ipv6_host("[localhost]"), "[localhost]");
     }
 
     #[test]
