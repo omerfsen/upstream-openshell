@@ -49,18 +49,24 @@ use kube::runtime::WatchStreamExt;
 use kube::runtime::wait::await_condition;
 use kube::runtime::watcher::{self, Event};
 use kube::{Client, Error as KubeError};
-use openshell_core::NetworkSupervisorTrustBundle;
-use openshell_core::driver_mounts;
-use openshell_core::driver_utils::{
+use openshell_driver_sdk::NetworkSupervisorTrustBundle;
+use openshell_driver_sdk::driver_mounts;
+use openshell_driver_sdk::driver_utils::{
     LABEL_GATEWAY_ID, LABEL_MANAGED_BY, LABEL_MANAGED_BY_VALUE, LABEL_SANDBOX_ID,
     LABEL_SANDBOX_NAME, LABEL_SANDBOX_WORKSPACE, openshell_sandbox_label_selector,
 };
-use openshell_core::gpu::{driver_gpu_requirements, effective_driver_gpu_count};
-use openshell_core::progress::{
+use openshell_driver_sdk::gpu::{driver_gpu_requirements, effective_driver_gpu_count};
+use openshell_driver_sdk::legacy_contract::ResolvedWorkloadIdentity;
+use openshell_driver_sdk::legacy_contract::convert::LaunchAuthenticationFields;
+use openshell_driver_sdk::legacy_contract::{
+    GatewayVerificationKey, SandboxTlsClientConfig, SandboxTlsServerConfig,
+    generate_sandbox_tls_material,
+};
+use openshell_driver_sdk::progress::{
     PROGRESS_STEP_PULLING_IMAGE, PROGRESS_STEP_REQUESTING_SANDBOX, PROGRESS_STEP_STARTING_SANDBOX,
     format_bytes, mark_progress_active, mark_progress_complete, mark_progress_detail,
 };
-use openshell_core::proto::compute::v1::{
+use openshell_driver_sdk::proto::compute::v1::{
     CpuResourceCapabilities, DriverCondition as SandboxCondition,
     DriverPlatformEvent as PlatformEvent, DriverSandbox as Sandbox,
     DriverSandboxSpec as SandboxSpec, DriverSandboxStatus as SandboxStatus,
@@ -69,13 +75,7 @@ use openshell_core::proto::compute::v1::{
     WatchSandboxesDeletedEvent, WatchSandboxesEvent, WatchSandboxesPlatformEvent,
     WatchSandboxesSandboxEvent, watch_sandboxes_event,
 };
-use openshell_core::proto_struct::{struct_to_json_object, value_to_json};
-use openshell_driver_sdk::legacy_contract::convert::LaunchAuthenticationFields;
-use openshell_isolation_interface::contract::ResolvedWorkloadIdentity;
-use openshell_sandbox_backend::boundary_protocol::{
-    GatewayVerificationKey, SandboxTlsClientConfig, SandboxTlsServerConfig,
-    generate_sandbox_tls_material,
-};
+use openshell_driver_sdk::proto_struct::{struct_to_json_object, value_to_json};
 use openshell_supervisor_control::{
     InstanceSupervision, LaunchError, RecoverableInstance, RecoveryBaseline,
     RegistrationTraceContext, SandboxInstanceRegistration, SharedSupervision,
@@ -521,7 +521,10 @@ async fn read_staged_upstream_proxy_ca_bundle(
         return Ok(None);
     };
     let pem = tokio::task::spawn_blocking(move || {
-        openshell_core::driver_utils::read_upstream_proxy_ca_bundle_file(&path, "proxy_ca_bundle")
+        openshell_driver_sdk::driver_utils::read_upstream_proxy_ca_bundle_file(
+            &path,
+            "proxy_ca_bundle",
+        )
     })
     .await
     .map_err(|error| {
@@ -581,7 +584,7 @@ async fn patch_dynamic_object_with_resource_version_retry(
         .map_err(KubernetesDriverError::from_kube)
 }
 
-impl From<KubernetesDriverError> for openshell_core::ComputeDriverError {
+impl From<KubernetesDriverError> for openshell_driver_sdk::ComputeDriverError {
     fn from(err: KubernetesDriverError) -> Self {
         match err {
             KubernetesDriverError::AlreadyExists => Self::AlreadyExists,
@@ -628,7 +631,7 @@ fn random_sandbox_runtime_token() -> Result<String, KubernetesDriverError> {
 /// The launch authentication fields of a driver sandbox spec: the typed message
 /// when the gateway set it, with the opaque bytes an older gateway sends.
 fn spec_launch_authentication(
-    spec: &openshell_core::proto::compute::v1::DriverSandboxSpec,
+    spec: &openshell_driver_sdk::proto::compute::v1::DriverSandboxSpec,
 ) -> LaunchAuthenticationFields<'_> {
     LaunchAuthenticationFields::new(
         spec.launch_credentials.as_deref(),
@@ -640,7 +643,7 @@ fn spec_launch_authentication(
 /// to the JSON bytes.
 fn decode_launch_authentication(
     fields: LaunchAuthenticationFields<'_>,
-) -> Result<openshell_core::jwt::SandboxLaunchAuthentication, KubernetesDriverError> {
+) -> Result<openshell_driver_sdk::jwt::SandboxLaunchAuthentication, KubernetesDriverError> {
     fields
         .resolve()
         .map_err(|error| {
@@ -656,7 +659,7 @@ fn decode_launch_authentication(
 }
 
 fn gateway_verification_keys(
-    keys: &[openshell_core::jwt::SessionVerificationKey],
+    keys: &[openshell_driver_sdk::jwt::SessionVerificationKey],
 ) -> Result<Vec<GatewayVerificationKey>, KubernetesDriverError> {
     keys.iter()
         .map(|key| {
@@ -939,7 +942,7 @@ fn validate_kubernetes_driver_volume_mounts(
     Ok(())
 }
 
-// TODO: replace with an openshell_core Kubernetes-name helper once available.
+// TODO: replace with an openshell_driver_sdk Kubernetes-name helper once available.
 fn is_dns_subdomain(value: &str) -> bool {
     value.len() <= 253 && value.split('.').all(is_dns_1123_label)
 }
@@ -1126,7 +1129,10 @@ impl KubernetesComputeDriver {
             environment.extend(openshell_otel::current_trace_context_environment());
         }
         if let Some(name) = &self.config.supervisor_gateway_name {
-            environment.push((openshell_core::sandbox_env::GATEWAY_NAME, name.clone()));
+            environment.push((
+                openshell_driver_sdk::sandbox_env::GATEWAY_NAME,
+                name.clone(),
+            ));
         }
         environment
     }
@@ -1307,13 +1313,13 @@ impl KubernetesComputeDriver {
 
     pub fn capabilities(&self) -> Result<GetCapabilitiesResponse, String> {
         Ok(GetCapabilitiesResponse {
-            resource_admission_policy: openshell_core::resource_admission::DriverAdmissionConfig {
+            resource_admission_policy: openshell_driver_sdk::resource_admission::DriverAdmissionConfig {
                 allow_driver_config: self.config.allow_driver_config,
                 resource_admission: self.config.resource_admission.clone(),
             }
             .acknowledgement(),
             driver_name: "kubernetes".to_string(),
-            driver_version: openshell_core::VERSION.to_string(),
+            driver_version: openshell_driver_sdk::VERSION.to_string(),
             default_image: self.config.default_image.clone(),
             gateway_manages_lifecycle: false,
             supports_sandbox_authentication: true,
@@ -1332,12 +1338,12 @@ impl KubernetesComputeDriver {
             }),
             rootfs_tar_staging_dir: String::new(),
             rootfs_tar_max_bytes: 0,
-            extension: Some(openshell_core::extension_protocol::extension_metadata(
-                openshell_core::extension_protocol::ExtensionFamily::Compute,
+            extension: Some(openshell_driver_sdk::extension_protocol::extension_metadata(
+                openshell_driver_sdk::extension_protocol::ExtensionFamily::Compute,
                 "openshell/kubernetes",
-                openshell_core::VERSION,
+                openshell_driver_sdk::VERSION,
                 [
-                    openshell_core::extension_protocol::COMPUTE_UPDATE_SANDBOX_CONFIGURATION
+                    openshell_driver_sdk::extension_protocol::COMPUTE_UPDATE_SANDBOX_CONFIGURATION
                         .to_string(),
                 ],
             )),
@@ -2110,7 +2116,7 @@ impl KubernetesComputeDriver {
     }
 
     pub async fn validate_sandbox_create(&self, sandbox: &Sandbox) -> Result<(), tonic::Status> {
-        openshell_core::resource_admission::check_sandbox_driver_config(
+        openshell_driver_sdk::resource_admission::check_sandbox_driver_config(
             self.config.allow_driver_config,
             sandbox,
         )?;
@@ -2152,7 +2158,7 @@ impl KubernetesComputeDriver {
         &self,
         sandbox: &Sandbox,
     ) -> Result<crate::resource_admission::Identities, tonic::Status> {
-        openshell_core::resource_admission::check_sandbox_driver_config(
+        openshell_driver_sdk::resource_admission::check_sandbox_driver_config(
             self.config.allow_driver_config,
             sandbox,
         )?;
@@ -2239,7 +2245,7 @@ impl KubernetesComputeDriver {
         &self,
         sandbox_id: &str,
     ) -> Result<
-        Option<openshell_core::proto::compute::v1::SupervisorAppEndpoint>,
+        Option<openshell_driver_sdk::proto::compute::v1::SupervisorAppEndpoint>,
         KubernetesDriverError,
     > {
         if !self.config.sandbox_runtime.app_listener.common.enabled {
@@ -2418,7 +2424,7 @@ impl KubernetesComputeDriver {
             SupervisorPlacement::Shared { route } => route,
         };
         Ok(Some(
-            openshell_core::proto::compute::v1::SupervisorAppEndpoint {
+            openshell_driver_sdk::proto::compute::v1::SupervisorAppEndpoint {
                 host,
                 port: u32::from(self.config.sandbox_runtime.app_listener.common.port),
                 runtime_identity: kubernetes_runtime_identity(namespace, uid, &component),
@@ -2578,7 +2584,7 @@ impl KubernetesComputeDriver {
         &self,
         sandbox: &Sandbox,
     ) -> Result<String, KubernetesDriverError> {
-        openshell_core::resource_admission::check_sandbox_driver_config(
+        openshell_driver_sdk::resource_admission::check_sandbox_driver_config(
             self.config.allow_driver_config,
             sandbox,
         )
@@ -2647,13 +2653,14 @@ impl KubernetesComputeDriver {
         let placement = self.new_generation_placement();
         let proxy_names = SandboxRuntimeNames::for_generation(&sandbox.id, &generation);
         let image_pull_secrets = self.generation_image_pull_secret_names(&proxy_names);
-        let main_process_spec = openshell_core::sandbox_env::MainProcessConfig::encode_driver_spec(
-            sandbox.spec.as_ref(),
-        )
-        .map_err(|error| {
-            KubernetesDriverError::InvalidArgument(format!("encode main process spec: {error}"))
-        })?;
-        let log_level = openshell_core::driver_utils::sandbox_log_level(sandbox, "info");
+        let main_process_spec =
+            openshell_driver_sdk::sandbox_env::MainProcessConfig::encode_driver_spec(
+                sandbox.spec.as_ref(),
+            )
+            .map_err(|error| {
+                KubernetesDriverError::InvalidArgument(format!("encode main process spec: {error}"))
+            })?;
+        let log_level = openshell_driver_sdk::driver_utils::sandbox_log_level(sandbox, "info");
         let params = SandboxPodParams {
             default_image: &self.config.default_image,
             image_pull_policy: self.config.image_pull_policy,
@@ -2708,7 +2715,7 @@ impl KubernetesComputeDriver {
         );
         annotations.insert(
             ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_STARTED_AT.to_string(),
-            openshell_core::time::now_ms().to_string(),
+            openshell_driver_sdk::time::now_ms().to_string(),
         );
         annotations.insert(
             ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_OPERATION.to_string(),
@@ -3492,7 +3499,7 @@ impl KubernetesComputeDriver {
     fn new_generation_placement(&self) -> SupervisorPlacement {
         if self.shared_supervisor.is_some() {
             SupervisorPlacement::Shared {
-                route: openshell_sandbox_backend::runtime_routed::new_route_handle(),
+                route: openshell_driver_sdk::legacy_contract::new_route_handle(),
             }
         } else {
             SupervisorPlacement::Dedicated
@@ -3792,7 +3799,7 @@ impl KubernetesComputeDriver {
         agent_uid: u32,
         agent_gid: u32,
         child_env: std::collections::HashMap<String, String>,
-        launch_authentication: &openshell_core::jwt::SandboxLaunchAuthentication,
+        launch_authentication: &openshell_driver_sdk::jwt::SandboxLaunchAuthentication,
         staged: StagedBootstrapMaterial,
     ) -> Result<(), KubernetesDriverError> {
         let namespace_uid = Api::<Namespace>::all(self.client.clone())
@@ -4249,7 +4256,7 @@ impl KubernetesComputeDriver {
         encoded_expected_runtime_identity: &str,
     ) -> Result<String, KubernetesDriverError> {
         let staged = self.read_staged_bootstrap_material().await?;
-        let generation = openshell_core::sandbox_generation::SandboxGenerationId::parse(
+        let generation = openshell_driver_sdk::sandbox_generation::SandboxGenerationId::parse(
             encoded_generation.to_string(),
         )
         .map_err(|error| KubernetesDriverError::InvalidArgument(error.to_string()))?;
@@ -4536,7 +4543,7 @@ impl KubernetesComputeDriver {
                     };
                     running_patch["metadata"]["annotations"] = serde_json::json!({
                         ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAPPING: "true",
-                        ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_STARTED_AT: openshell_core::time::now_ms().to_string(),
+                        ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_STARTED_AT: openshell_driver_sdk::time::now_ms().to_string(),
                         ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_OPERATION: "restart",
                         ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_PHASE: SandboxRuntimeBootstrapPhase::Preparing.as_str(),
                         ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_SESSION: launch_authentication.supervisor.session_id.to_string(),
@@ -5906,8 +5913,8 @@ fn shared_instance_registration(
     object: &DynamicObject,
     route: &str,
     sandbox_id: &str,
-    runtime_descriptor: openshell_sandbox_backend::boundary_protocol::SandboxRuntimeDescriptor,
-    launch_authentication: &openshell_core::jwt::SandboxLaunchAuthentication,
+    runtime_descriptor: openshell_driver_sdk::legacy_contract::SandboxRuntimeDescriptor,
+    launch_authentication: &openshell_driver_sdk::jwt::SandboxLaunchAuthentication,
     proxy_ca: crate::sandbox_runtime::ProxyCaMaterial,
 ) -> Result<SandboxInstanceRegistration, KubernetesDriverError> {
     Ok(SandboxInstanceRegistration {
@@ -7330,7 +7337,7 @@ fn map_kube_event_to_platform(
     Some((
         sandbox_id,
         PlatformEvent {
-            event_time: openshell_core::time::timestamp_from_millis(ts).ok(),
+            event_time: openshell_driver_sdk::time::timestamp_from_millis(ts).ok(),
             source: "kubernetes".to_string(),
             r#type: obj.type_.clone().unwrap_or_default(),
             reason: obj.reason.clone().unwrap_or_default(),
@@ -7640,16 +7647,16 @@ fn apply_supervisor_sandbox_runtime_boundary(
         .as_array_mut()
         .expect("agent environment must be an array");
     for key in [
-        openshell_core::sandbox_env::ENDPOINT,
-        openshell_core::sandbox_env::GATEWAY_TLS_SERVER_NAME,
-        openshell_core::sandbox_env::TLS_CA,
-        openshell_core::sandbox_env::TLS_CERT,
-        openshell_core::sandbox_env::TLS_KEY,
-        openshell_core::sandbox_env::SANDBOX_TOKEN,
-        openshell_core::sandbox_env::SANDBOX_TOKEN_FILE,
-        openshell_core::sandbox_env::K8S_SA_TOKEN_FILE,
-        openshell_core::sandbox_env::PROVIDER_SPIFFE_WORKLOAD_API_SOCKET,
-        openshell_core::sandbox_env::MAIN_PROCESS_SPEC,
+        openshell_driver_sdk::sandbox_env::ENDPOINT,
+        openshell_driver_sdk::sandbox_env::GATEWAY_TLS_SERVER_NAME,
+        openshell_driver_sdk::sandbox_env::TLS_CA,
+        openshell_driver_sdk::sandbox_env::TLS_CERT,
+        openshell_driver_sdk::sandbox_env::TLS_KEY,
+        openshell_driver_sdk::sandbox_env::SANDBOX_TOKEN,
+        openshell_driver_sdk::sandbox_env::SANDBOX_TOKEN_FILE,
+        openshell_driver_sdk::sandbox_env::K8S_SA_TOKEN_FILE,
+        openshell_driver_sdk::sandbox_env::PROVIDER_SPIFFE_WORKLOAD_API_SOCKET,
+        openshell_driver_sdk::sandbox_env::MAIN_PROCESS_SPEC,
     ] {
         remove_env(env, key);
     }
@@ -7880,7 +7887,7 @@ fn spec_pod_env(spec: Option<&SandboxSpec>) -> std::collections::HashMap<String,
     let mut env = spec.map_or_else(Default::default, |s| s.environment.clone());
     if let Some(s) = spec.filter(|s| !s.log_level.is_empty()) {
         env.insert(
-            openshell_core::sandbox_env::LOG_LEVEL.to_string(),
+            openshell_driver_sdk::sandbox_env::LOG_LEVEL.to_string(),
             s.log_level.clone(),
         );
     }
@@ -8351,14 +8358,14 @@ fn build_sandbox_env(
 ) -> Vec<serde_json::Value> {
     let mut env = Vec::new();
     for (name, value) in template_environment.iter().chain(spec_environment) {
-        if !name.starts_with("OPENSHELL_") || name == openshell_core::sandbox_env::LOG_LEVEL {
+        if !name.starts_with("OPENSHELL_") || name == openshell_driver_sdk::sandbox_env::LOG_LEVEL {
             upsert_env(&mut env, name, value);
         }
     }
     upsert_env(
         &mut env,
-        openshell_core::sandbox_env::TELEMETRY_ENABLED,
-        openshell_core::telemetry::enabled_env_value(),
+        openshell_driver_sdk::sandbox_env::TELEMETRY_ENABLED,
+        openshell_driver_sdk::telemetry::enabled_env_value(),
     );
     env
 }
@@ -8376,18 +8383,18 @@ fn upsert_env(env: &mut Vec<serde_json::Value>, name: &str, value: &str) {
 }
 
 fn apply_resolved_identity_env(env: &mut Vec<serde_json::Value>, uid: u32, gid: u32) {
-    remove_env(env, openshell_core::sandbox_env::OCI_IMAGE_USER);
-    remove_env(env, openshell_core::sandbox_env::SANDBOX_UID);
-    remove_env(env, openshell_core::sandbox_env::SANDBOX_GID);
-    upsert_env(env, openshell_core::sandbox_env::OCI_IMAGE_USER, "");
+    remove_env(env, openshell_driver_sdk::sandbox_env::OCI_IMAGE_USER);
+    remove_env(env, openshell_driver_sdk::sandbox_env::SANDBOX_UID);
+    remove_env(env, openshell_driver_sdk::sandbox_env::SANDBOX_GID);
+    upsert_env(env, openshell_driver_sdk::sandbox_env::OCI_IMAGE_USER, "");
     upsert_env(
         env,
-        openshell_core::sandbox_env::SANDBOX_UID,
+        openshell_driver_sdk::sandbox_env::SANDBOX_UID,
         &uid.to_string(),
     );
     upsert_env(
         env,
-        openshell_core::sandbox_env::SANDBOX_GID,
+        openshell_driver_sdk::sandbox_env::SANDBOX_GID,
         &gid.to_string(),
     );
 }
@@ -8825,7 +8832,7 @@ fn sandbox_runtime_stop_begin_patch(resource_version: &str) -> serde_json::Value
             "resourceVersion": resource_version,
             "annotations": {
                 ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAPPING: "true",
-                ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_STARTED_AT: openshell_core::time::now_ms().to_string(),
+                ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_STARTED_AT: openshell_driver_sdk::time::now_ms().to_string(),
                 ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_OPERATION: "stop",
                 ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_PHASE: SandboxRuntimeBootstrapPhase::Releasing.as_str(),
                 ANNOTATION_SANDBOX_RUNTIME_READINESS: "unavailable",
@@ -8848,7 +8855,7 @@ fn sandbox_runtime_suspension_patch(
             "resourceVersion": resource_version,
             "annotations": {
                 ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAPPING: "true",
-                ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_STARTED_AT: openshell_core::time::now_ms().to_string(),
+                ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_STARTED_AT: openshell_driver_sdk::time::now_ms().to_string(),
                 ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_OPERATION: "stop",
                 ANNOTATION_SANDBOX_RUNTIME_BOOTSTRAP_PHASE: SandboxRuntimeBootstrapPhase::Suspending.as_str(),
                 ANNOTATION_SANDBOX_RUNTIME_READINESS: "unavailable",
@@ -9204,7 +9211,7 @@ mod tests {
 
     #[tokio::test]
     async fn supervisor_otlp_environment_carries_only_configured_signals() {
-        use openshell_core::sandbox_env::{
+        use openshell_driver_sdk::sandbox_env::{
             OTLP_AGENT_ENDPOINT, OTLP_AGENT_PROTOCOL, OTLP_ENDPOINT, OTLP_OCSF_ENDPOINT,
             OTLP_OCSF_PROTOCOL, OTLP_PROTOCOL, OtlpExport, OtlpProtocol, SupervisorOtlp,
         };
@@ -9286,7 +9293,7 @@ mod tests {
         assert_eq!(
             driver.supervisor_otlp_environment(),
             [(
-                openshell_core::sandbox_env::GATEWAY_NAME,
+                openshell_driver_sdk::sandbox_env::GATEWAY_NAME,
                 "prod-west".to_string()
             )]
         );
@@ -9501,11 +9508,11 @@ mod tests {
     }
 
     use crate::sandbox_runtime::{ADDITIONAL_CA_MOUNT_PATH, ADDITIONAL_CA_VOLUME_NAME};
-    use openshell_core::progress::{
+    use openshell_driver_sdk::progress::{
         PROGRESS_ACTIVE_DETAIL_KEY, PROGRESS_ACTIVE_STEP_KEY, PROGRESS_COMPLETE_LABEL_KEY,
         PROGRESS_COMPLETE_STEP_KEY,
     };
-    use openshell_core::proto::compute::v1::{GpuResourceRequirements, ResourceRequirements};
+    use openshell_driver_sdk::proto::compute::v1::{GpuResourceRequirements, ResourceRequirements};
     use prost_types::{Struct, Value, value::Kind};
     use std::collections::{BTreeSet, VecDeque};
 
@@ -9960,7 +9967,7 @@ mod tests {
         let serde_json::Value::Object(object) = value else {
             panic!("expected JSON object");
         };
-        openshell_core::proto_struct::json_object_to_struct(object)
+        openshell_driver_sdk::proto_struct::json_object_to_struct(object)
             .expect("test JSON must convert to a protobuf Struct")
     }
 
@@ -12075,11 +12082,11 @@ mod tests {
             serde_json::json!({"drop": ["ALL"]})
         );
         assert_eq!(
-            rendered_env(agent, openshell_core::sandbox_env::ENDPOINT),
+            rendered_env(agent, openshell_driver_sdk::sandbox_env::ENDPOINT),
             None
         );
         assert_eq!(
-            rendered_env(agent, openshell_core::sandbox_env::K8S_SA_TOKEN_FILE),
+            rendered_env(agent, openshell_driver_sdk::sandbox_env::K8S_SA_TOKEN_FILE),
             None
         );
         assert_eq!(
@@ -12446,7 +12453,7 @@ mod tests {
 
     #[test]
     fn gpu_sandbox_preserves_existing_resource_limits() {
-        use openshell_core::proto::compute::v1::DriverResourceRequirements;
+        use openshell_driver_sdk::proto::compute::v1::DriverResourceRequirements;
         let template = SandboxTemplate {
             resources: Some(DriverResourceRequirements {
                 cpu_limit: "2".to_string(),
@@ -12473,7 +12480,7 @@ mod tests {
 
     #[test]
     fn cpu_and_memory_limits_are_mirrored_to_requests() {
-        use openshell_core::proto::compute::v1::DriverResourceRequirements;
+        use openshell_driver_sdk::proto::compute::v1::DriverResourceRequirements;
         let template = SandboxTemplate {
             resources: Some(DriverResourceRequirements {
                 cpu_limit: "500m".to_string(),
@@ -12964,13 +12971,13 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         temp_env::with_vars(
             [(
-                openshell_core::sandbox_env::TELEMETRY_ENABLED,
+                openshell_driver_sdk::sandbox_env::TELEMETRY_ENABLED,
                 Some("false"),
             )],
             || {
                 let spec = SandboxSpec {
                     environment: std::collections::HashMap::from([(
-                        openshell_core::sandbox_env::TELEMETRY_ENABLED.to_string(),
+                        openshell_driver_sdk::sandbox_env::TELEMETRY_ENABLED.to_string(),
                         "true".to_string(),
                     )]),
                     ..SandboxSpec::default()
@@ -12981,7 +12988,9 @@ mod tests {
                     .unwrap();
                 let telemetry_entries = env
                     .iter()
-                    .filter(|entry| entry["name"] == openshell_core::sandbox_env::TELEMETRY_ENABLED)
+                    .filter(|entry| {
+                        entry["name"] == openshell_driver_sdk::sandbox_env::TELEMETRY_ENABLED
+                    })
                     .collect::<Vec<_>>();
 
                 assert_eq!(telemetry_entries.len(), 1);
@@ -12994,8 +13003,9 @@ mod tests {
     fn sandbox_pod_drops_legacy_network_capability_environment() {
         let spec = SandboxSpec {
             environment: std::collections::HashMap::from([(
-                openshell_core::sandbox_env::NETWORK_RUNTIME_CAPABILITIES.to_string(),
-                openshell_core::sandbox_env::POLICY_DNS_TRANSPARENT_TCP_CAPABILITY.to_string(),
+                openshell_driver_sdk::sandbox_env::NETWORK_RUNTIME_CAPABILITIES.to_string(),
+                openshell_driver_sdk::sandbox_env::POLICY_DNS_TRANSPARENT_TCP_CAPABILITY
+                    .to_string(),
             )]),
             ..SandboxSpec::default()
         };
@@ -13004,7 +13014,7 @@ mod tests {
             .as_array()
             .unwrap();
         assert!(!env.iter().any(|entry| {
-            entry["name"] == openshell_core::sandbox_env::NETWORK_RUNTIME_CAPABILITIES
+            entry["name"] == openshell_driver_sdk::sandbox_env::NETWORK_RUNTIME_CAPABILITIES
         }));
     }
 
@@ -13637,12 +13647,12 @@ mod tests {
     async fn call_ensure_workspace(
         service: &crate::ComputeDriverService,
     ) -> Result<
-        tonic::Response<openshell_core::proto::compute::v1::EnsureWorkspaceResponse>,
+        tonic::Response<openshell_driver_sdk::proto::compute::v1::EnsureWorkspaceResponse>,
         tonic::Status,
     > {
-        openshell_core::proto::compute::v1::compute_driver_server::ComputeDriver::ensure_workspace(
+        openshell_driver_sdk::proto::compute::v1::compute_driver_server::ComputeDriver::ensure_workspace(
             service,
-            tonic::Request::new(openshell_core::proto::compute::v1::EnsureWorkspaceRequest {
+            tonic::Request::new(openshell_driver_sdk::proto::compute::v1::EnsureWorkspaceRequest {
                 workspace: "team-a".into(),
             }),
         )
@@ -14836,7 +14846,7 @@ mod launch_authentication_fields_tests {
         let document = include_str!(
             "../../openshell-driver-sdk/tests/legacy_contract/examples/SandboxLaunchAuthentication.json"
         );
-        let authentication: openshell_core::jwt::SandboxLaunchAuthentication =
+        let authentication: openshell_driver_sdk::jwt::SandboxLaunchAuthentication =
             serde_json::from_str(document).unwrap();
         serde_json::to_vec(&authentication).unwrap()
     }
