@@ -79,7 +79,10 @@ reading the protobuf JSON example must give back the legacy example. The
 examples are the reference for a driver in any language. Regenerate them from
 the legacy examples with `UPDATE_EXAMPLES=1` and review the diff.
 
-No driver writes or reads the new file format yet.
+The Docker driver writes the new files beside the legacy ones, and the
+supervisor and the sandbox boundary prefer them (see `legacy_contract::document`
+and the file naming rule in `proto/README.md`). Other drivers write only the
+legacy files, which readers still accept.
 
 ### Launch credentials over gRPC
 

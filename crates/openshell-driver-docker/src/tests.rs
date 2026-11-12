@@ -181,6 +181,26 @@ async fn restart_rotates_bootstrap_descriptor_and_provisioning_evidence_together
     assert_eq!(supervisor.runtime_generation.as_str(), bootstrap.generation);
     assert_eq!(bootstrap.session_id, descriptor.session_id);
     assert_eq!(bootstrap.session_id, supervisor.session_id);
+    // The protobuf JSON files sit beside the legacy ones and agree with them.
+    {
+        use openshell_driver_sdk::legacy_contract::{ContractDocument, protobuf_json_path};
+        let read = |name: &str| fs::read(protobuf_json_path(&directory.join(name))).unwrap();
+        let written_bootstrap =
+            BoundaryConfig::from_protobuf_json(&read(BOUNDARY_CONFIG_FILE)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&written_bootstrap).unwrap(),
+            serde_json::to_value(&bootstrap).unwrap()
+        );
+        let written_descriptor =
+            SandboxRuntimeDescriptor::from_protobuf_json(&read(RUNTIME_DESCRIPTOR_FILE)).unwrap();
+        assert_eq!(written_descriptor, descriptor);
+        let written_supervisor =
+            SupervisorAuthBundle::from_protobuf_json(&read(SUPERVISOR_AUTH_BUNDLE_FILE)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&written_supervisor).unwrap(),
+            serde_json::to_value(&supervisor).unwrap()
+        );
+    }
     bootstrap
         .provisioning_evidence
         .validate("generation-2")
@@ -1756,6 +1776,7 @@ fn sandbox_bundle_prepares_only_the_driver_managed_workspace() {
     let default_archive = docker_sandbox_bundle_archive(
         b"sandbox-binary",
         b"{}",
+        None,
         DockerSandboxTls {
             certificate: b"server-cert",
             private_key: b"server-key",
@@ -1785,6 +1806,7 @@ fn sandbox_bundle_prepares_only_the_driver_managed_workspace() {
     let image_archive = docker_sandbox_bundle_archive(
         b"sandbox-binary",
         b"{}",
+        None,
         DockerSandboxTls {
             certificate: b"server-cert",
             private_key: b"server-key",
@@ -1809,6 +1831,7 @@ fn sandbox_bundle_stages_private_tls_server_material() {
     let archive = docker_sandbox_bundle_archive(
         b"sandbox-binary",
         b"{}",
+        None,
         DockerSandboxTls {
             certificate: b"server-cert",
             private_key: b"server-key",

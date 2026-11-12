@@ -42,9 +42,13 @@ pub mod boundary;
 #[cfg(feature = "legacy-contract")]
 pub mod convert;
 #[cfg(feature = "legacy-contract")]
+pub mod document;
+#[cfg(feature = "legacy-contract")]
 pub mod identity;
 
 #[cfg(feature = "legacy-contract")]
 pub use boundary::*;
+#[cfg(feature = "legacy-contract")]
+pub use document::{ContractDocument, ContractDocumentError, protobuf_json_path, read_document};
 #[cfg(feature = "legacy-contract")]
 pub use identity::*;
