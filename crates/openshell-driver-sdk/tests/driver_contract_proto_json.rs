@@ -19,11 +19,23 @@ use std::path::Path;
 use openshell_driver_sdk::jwt::{SandboxLaunchAuthentication, SupervisorAuthBundle};
 use openshell_driver_sdk::legacy_contract::{BoundaryConfig, SandboxRuntimeDescriptor};
 use openshell_driver_sdk::proto::FILE_DESCRIPTOR_SET;
+use openshell_driver_sdk::proto::compute::v1 as compute;
 use openshell_driver_sdk::proto::sandbox_runtime::v1 as pb;
 use prost_reflect::{DescriptorPool, DeserializeOptions, DynamicMessage};
 use serde_json::{Value, json};
 
 const PACKAGE: &str = "openshell.sandbox.runtime.v1";
+/// The launch authentication documents live in the compute package, which
+/// `compute_driver.proto` carries them in.
+const LAUNCH_PACKAGE: &str = "openshell.compute.v1";
+
+fn qualified(document_type: &str) -> String {
+    let package = match document_type {
+        "SupervisorAuthBundle" | "SandboxLaunchAuthentication" => LAUNCH_PACKAGE,
+        _ => PACKAGE,
+    };
+    format!("{package}.{document_type}")
+}
 
 macro_rules! example {
     ($name:literal) => {
@@ -72,14 +84,16 @@ fn to_proto_json(document_type: &str, legacy: &Value) -> Value {
         "SandboxRuntimeDescriptor" => {
             through::<SandboxRuntimeDescriptor, pb::SandboxRuntimeDescriptor>(legacy)
         }
-        "SupervisorAuthBundle" => through::<SupervisorAuthBundle, pb::SupervisorAuthBundle>(legacy),
+        "SupervisorAuthBundle" => {
+            through::<SupervisorAuthBundle, compute::SupervisorAuthBundle>(legacy)
+        }
         "SandboxLaunchAuthentication" => {
-            through::<SandboxLaunchAuthentication, pb::SandboxLaunchAuthentication>(legacy)
+            through::<SandboxLaunchAuthentication, compute::SandboxLaunchAuthentication>(legacy)
         }
         other => panic!("no type registered for {other}"),
     };
     let descriptor = pool()
-        .get_message_by_name(&format!("{PACKAGE}.{document_type}"))
+        .get_message_by_name(&qualified(document_type))
         .expect("message exists");
     let message = DynamicMessage::decode(descriptor, bytes.as_slice()).expect("message decodes");
     serde_json::to_value(&message).expect("message serializes as protobuf JSON")
@@ -99,7 +113,7 @@ fn to_legacy(document_type: &str, text: &str) -> Result<Value, String> {
         serde_json::to_value(&legacy).map_err(|error| error.to_string())
     }
     let descriptor = pool()
-        .get_message_by_name(&format!("{PACKAGE}.{document_type}"))
+        .get_message_by_name(&qualified(document_type))
         .expect("message exists");
     let mut deserializer = serde_json::Deserializer::from_str(text);
     let message = DynamicMessage::deserialize_with_options(
@@ -114,9 +128,11 @@ fn to_legacy(document_type: &str, text: &str) -> Result<Value, String> {
         "SandboxRuntimeDescriptor" => {
             back::<SandboxRuntimeDescriptor, pb::SandboxRuntimeDescriptor>(&message)
         }
-        "SupervisorAuthBundle" => back::<SupervisorAuthBundle, pb::SupervisorAuthBundle>(&message),
+        "SupervisorAuthBundle" => {
+            back::<SupervisorAuthBundle, compute::SupervisorAuthBundle>(&message)
+        }
         "SandboxLaunchAuthentication" => {
-            back::<SandboxLaunchAuthentication, pb::SandboxLaunchAuthentication>(&message)
+            back::<SandboxLaunchAuthentication, compute::SandboxLaunchAuthentication>(&message)
         }
         other => panic!("no type registered for {other}"),
     }

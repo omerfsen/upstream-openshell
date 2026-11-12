@@ -583,20 +583,20 @@ impl TryFrom<pb::BoundaryConfig> for BoundaryConfig {
 // Authentication
 // ---------------------------------------------------------------------------
 
-fn otlp_tls_to_pb(material: &OtlpTlsMaterial) -> pb::OtlpTlsMaterial {
-    pb::OtlpTlsMaterial {
+fn otlp_tls_to_pb(material: &OtlpTlsMaterial) -> compute::OtlpTlsMaterial {
+    compute::OtlpTlsMaterial {
         ca_pem: material.ca_pem.clone(),
         client: material
             .client
             .as_ref()
-            .map(|client| pb::OtlpClientIdentity {
+            .map(|client| compute::OtlpClientIdentity {
                 cert_pem: client.cert_pem.clone(),
                 key_pem: client.key_pem.expose_secret().to_string(),
             }),
     }
 }
 
-fn otlp_tls_from_pb(material: pb::OtlpTlsMaterial) -> OtlpTlsMaterial {
+fn otlp_tls_from_pb(material: compute::OtlpTlsMaterial) -> OtlpTlsMaterial {
     OtlpTlsMaterial {
         ca_pem: material.ca_pem,
         client: material.client.map(|client| OtlpClientIdentity {
@@ -606,7 +606,7 @@ fn otlp_tls_from_pb(material: pb::OtlpTlsMaterial) -> OtlpTlsMaterial {
     }
 }
 
-impl From<&SupervisorAuthBundle> for pb::SupervisorAuthBundle {
+impl From<&SupervisorAuthBundle> for compute::SupervisorAuthBundle {
     fn from(bundle: &SupervisorAuthBundle) -> Self {
         // A legacy bundle holds the indexes as `usize` values that its own
         // validation bounds by the list length, so they fit in 32 bits.
@@ -645,10 +645,10 @@ impl From<&SupervisorAuthBundle> for pb::SupervisorAuthBundle {
     }
 }
 
-impl TryFrom<pb::SupervisorAuthBundle> for SupervisorAuthBundle {
+impl TryFrom<compute::SupervisorAuthBundle> for SupervisorAuthBundle {
     type Error = ContractConversionError;
 
-    fn try_from(value: pb::SupervisorAuthBundle) -> Result<Self> {
+    fn try_from(value: compute::SupervisorAuthBundle) -> Result<Self> {
         check_version(&value.contract_version, false)?;
         let token = |value: String| {
             SecretJwt::parse(value).map_err(|_| {
@@ -683,9 +683,9 @@ impl TryFrom<pb::SupervisorAuthBundle> for SupervisorAuthBundle {
     }
 }
 
-impl From<&SandboxLaunchAuthentication> for pb::SandboxLaunchAuthentication {
+impl From<&SandboxLaunchAuthentication> for compute::SandboxLaunchAuthentication {
     fn from(authentication: &SandboxLaunchAuthentication) -> Self {
-        let mut supervisor: pb::SupervisorAuthBundle = (&authentication.supervisor).into();
+        let mut supervisor: compute::SupervisorAuthBundle = (&authentication.supervisor).into();
         // The version belongs to the enclosing document.
         supervisor.contract_version = String::new();
         Self {
@@ -695,7 +695,7 @@ impl From<&SandboxLaunchAuthentication> for pb::SandboxLaunchAuthentication {
             verification_keys: authentication
                 .verification_keys
                 .iter()
-                .map(|key| pb::LaunchVerificationKey {
+                .map(|key| compute::LaunchVerificationKey {
                     key_id: key.key_id.clone(),
                     public_key_pem: key.public_key_pem.clone(),
                 })
@@ -704,10 +704,10 @@ impl From<&SandboxLaunchAuthentication> for pb::SandboxLaunchAuthentication {
     }
 }
 
-impl TryFrom<pb::SandboxLaunchAuthentication> for SandboxLaunchAuthentication {
+impl TryFrom<compute::SandboxLaunchAuthentication> for SandboxLaunchAuthentication {
     type Error = ContractConversionError;
 
-    fn try_from(value: pb::SandboxLaunchAuthentication) -> Result<Self> {
+    fn try_from(value: compute::SandboxLaunchAuthentication) -> Result<Self> {
         check_version(&value.contract_version, true)?;
         let authentication = Self {
             supervisor: value
@@ -728,5 +728,84 @@ impl TryFrom<pb::SandboxLaunchAuthentication> for SandboxLaunchAuthentication {
             .validate()
             .map_err(|error| ContractConversionError::new(error.to_string()))?;
         Ok(authentication)
+    }
+}
+
+/// The typed form of the launch authentication the gateway sends beside the
+/// opaque JSON bytes.
+///
+/// Returns `None` when there are no bytes, which is how a gateway without a
+/// launch signer marks the field absent.
+///
+/// # Errors
+///
+/// Returns an error when `encoded` is not a valid launch authentication.
+pub fn typed_launch_authentication(
+    encoded: &[u8],
+) -> Result<Option<compute::SandboxLaunchAuthentication>> {
+    if encoded.is_empty() {
+        return Ok(None);
+    }
+    let authentication: SandboxLaunchAuthentication = serde_json::from_slice(encoded)
+        .map_err(|error| ContractConversionError::new(error.to_string()))?;
+    Ok(Some((&authentication).into()))
+}
+
+/// The launch authentication a driver acts on.
+///
+/// The typed field wins when the gateway set it; an older gateway sets only the
+/// JSON bytes, which are decoded as before. Returns `None` when neither is
+/// present. The result is validated.
+///
+/// # Errors
+///
+/// Returns an error when the field that is used is not a valid launch
+/// authentication. A set typed field is never bypassed for the bytes.
+pub fn resolve_launch_authentication(
+    typed: Option<&compute::SandboxLaunchAuthentication>,
+    encoded: &[u8],
+) -> Result<Option<SandboxLaunchAuthentication>> {
+    if let Some(typed) = typed {
+        return typed.clone().try_into().map(Some);
+    }
+    if encoded.is_empty() {
+        return Ok(None);
+    }
+    let authentication: SandboxLaunchAuthentication = serde_json::from_slice(encoded)
+        .map_err(|error| ContractConversionError::new(error.to_string()))?;
+    authentication
+        .validate()
+        .map_err(|error| ContractConversionError::new(error.to_string()))?;
+    Ok(Some(authentication))
+}
+
+/// The two forms of the launch authentication on a driver request: the typed
+/// message newer gateways fill, and the JSON bytes every gateway has sent.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LaunchAuthenticationFields<'a> {
+    pub typed: Option<&'a compute::SandboxLaunchAuthentication>,
+    pub encoded: &'a [u8],
+}
+
+impl<'a> LaunchAuthenticationFields<'a> {
+    #[must_use]
+    pub fn new(typed: Option<&'a compute::SandboxLaunchAuthentication>, encoded: &'a [u8]) -> Self {
+        Self { typed, encoded }
+    }
+
+    /// Whether the gateway sent no launch authentication in either form.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.typed.is_none() && self.encoded.is_empty()
+    }
+
+    /// The validated launch authentication, preferring the typed field. `None`
+    /// when neither form is present.
+    ///
+    /// # Errors
+    ///
+    /// See [`resolve_launch_authentication`].
+    pub fn resolve(&self) -> Result<Option<SandboxLaunchAuthentication>> {
+        resolve_launch_authentication(self.typed, self.encoded)
     }
 }

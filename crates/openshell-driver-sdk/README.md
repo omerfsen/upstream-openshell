@@ -66,7 +66,8 @@ fails there.
 protobuf messages, written as canonical protobuf JSON. It reuses
 `ResolvedWorkloadIdentity` and `DriverFenceEvidence` from `compute_driver.proto`
 and adds `contract_version`, which tells a new document from a legacy one. The
-generated types are in `proto::sandbox_runtime`, and `proto::FILE_DESCRIPTOR_SET`
+generated types are in `proto::sandbox_runtime`, except the launch authentication
+messages, which are in `proto::compute`; and `proto::FILE_DESCRIPTOR_SET`
 holds the descriptors for a reader or writer that works with the JSON directly.
 
 `legacy_contract::convert` converts between the legacy types and the messages
@@ -78,7 +79,20 @@ reading the protobuf JSON example must give back the legacy example. The
 examples are the reference for a driver in any language. Regenerate them from
 the legacy examples with `UPDATE_EXAMPLES=1` and review the diff.
 
-No driver or reader uses the new format yet.
+No driver writes or reads the new file format yet.
+
+### Launch authentication over gRPC
+
+`DriverSandboxSpec.typed_launch_authentication` and
+`StartSandboxRequest.typed_launch_authentication` carry the launch
+authentication as the typed `SandboxLaunchAuthentication` message of
+`launch_authentication.proto`, beside the opaque `launch_authentication` bytes.
+The gateway fills both from one value. A driver resolves them with
+`legacy_contract::convert::LaunchAuthenticationFields`: the typed field wins
+when it is set, the bytes are decoded as before when it is not, and neither
+present is `None`. A typed field that fails validation is an error; the driver
+does not fall back to the bytes. `typed_launch_authentication` produces the typed
+form from the bytes for the gateway.
 
 ### Migrating
 
@@ -94,8 +108,8 @@ A lower-risk path than reading both formats is to write both: a driver writes
 the new format under a new file name beside the legacy one, and the supervisor
 and sandbox prefer the new file when present. Every document is regenerated at
 each create and restart, so there is no stored data to migrate. The gateway's
-launch authentication travels over gRPC, so it can gain a typed message field
-beside the opaque bytes instead of a new JSON form. Docker rewrites its own
+launch authentication travels over gRPC, so it gains a typed message field
+beside the opaque bytes instead of a new JSON form (see below). Docker rewrites its own
 `BoundaryConfig` and descriptor in place at restart; it would first need to keep
 its restart state privately, as Podman does, so that a driver never parses a
 file written by an older one.

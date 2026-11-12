@@ -203,7 +203,10 @@ impl ComputeDriver for ComputeDriverService {
                         .start_sandbox(
                             &request.sandbox_id,
                             &request.generation_id,
-                            &request.launch_authentication,
+                            openshell_driver_sdk::legacy_contract::convert::LaunchAuthenticationFields::new(
+                                request.typed_launch_authentication.as_deref(),
+                                &request.launch_authentication,
+                            ),
                             request.sandbox.as_ref(),
                         )
                         .await
