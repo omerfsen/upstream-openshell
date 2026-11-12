@@ -136,9 +136,9 @@ unknown fields. The messages reuse `ResolvedWorkloadIdentity` and
 
 The launch authentication and the supervisor auth bundle it carries are defined
 in [`launch_credentials.proto`](launch_credentials.proto), in package
-`openshell.compute.v1`. They cannot sit in `driver_contract.proto`'s package:
+`openshell.compute.v1`. They cannot sit in `sandbox_runtime.proto`'s package:
 `compute_driver.proto` carries the launch authentication as a typed message, and
-`driver_contract.proto` imports `compute_driver.proto`, so a shared package
+`sandbox_runtime.proto` imports `compute_driver.proto`, so a shared package
 would create an import cycle, which `buf` rejects. `DriverSandboxSpec` and
 `StartSandboxRequest` carry it as `launch_credentials` beside the older
 opaque `launch_authentication` bytes (the serde JSON of the legacy type). The
