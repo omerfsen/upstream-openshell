@@ -81,17 +81,17 @@ the legacy examples with `UPDATE_EXAMPLES=1` and review the diff.
 
 No driver writes or reads the new file format yet.
 
-### Launch authentication over gRPC
+### Launch credentials over gRPC
 
-`DriverSandboxSpec.typed_launch_authentication` and
-`StartSandboxRequest.typed_launch_authentication` carry the launch
-authentication as the typed `SandboxLaunchAuthentication` message of
-`launch_authentication.proto`, beside the opaque `launch_authentication` bytes.
+`DriverSandboxSpec.launch_credentials` and
+`StartSandboxRequest.launch_credentials` carry the launch
+credentials as the typed `SandboxLaunchCredentials` message of
+`launch_credentials.proto`, beside the opaque `launch_authentication` bytes.
 The gateway fills both from one value. A driver resolves them with
 `legacy_contract::convert::LaunchAuthenticationFields`: the typed field wins
 when it is set, the bytes are decoded as before when it is not, and neither
 present is `None`. A typed field that fails validation is an error; the driver
-does not fall back to the bytes. `typed_launch_authentication` produces the typed
+does not fall back to the bytes. `launch_credentials_from_bytes` produces the typed
 form from the bytes for the gateway.
 
 ### Migrating

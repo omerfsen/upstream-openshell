@@ -4614,13 +4614,13 @@ fn launch_authentication_typed_field_alone_is_accepted() {
     // A newer gateway that fills only the typed field.
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
-    spec.typed_launch_authentication =
-        openshell_driver_sdk::legacy_contract::convert::typed_launch_authentication(
+    spec.launch_credentials =
+        openshell_driver_sdk::legacy_contract::convert::launch_credentials_from_bytes(
             &spec.launch_authentication,
         )
         .unwrap()
         .map(Box::new);
-    assert!(spec.typed_launch_authentication.is_some());
+    assert!(spec.launch_credentials.is_some());
     spec.launch_authentication.clear();
     DockerComputeDriver::validate_sandbox_auth(&sandbox).unwrap();
 }
@@ -4629,13 +4629,13 @@ fn launch_authentication_typed_field_alone_is_accepted() {
 fn launch_authentication_typed_field_wins_over_the_bytes() {
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
-    let mut typed = openshell_driver_sdk::legacy_contract::convert::typed_launch_authentication(
+    let mut typed = openshell_driver_sdk::legacy_contract::convert::launch_credentials_from_bytes(
         &spec.launch_authentication,
     )
     .unwrap()
     .unwrap();
     typed.gateway_id = "typed-gateway".to_string();
-    spec.typed_launch_authentication = Some(Box::new(typed));
+    spec.launch_credentials = Some(Box::new(typed));
     let decoded = decode_docker_launch_authentication(spec_launch_authentication(spec)).unwrap();
     assert_eq!(decoded.gateway_id, "typed-gateway");
 }
@@ -4645,6 +4645,6 @@ fn launch_authentication_bytes_alone_still_decode() {
     // An older gateway that fills only the bytes.
     let sandbox = test_sandbox();
     let spec = sandbox.spec.as_ref().unwrap();
-    assert!(spec.typed_launch_authentication.is_none());
+    assert!(spec.launch_credentials.is_none());
     decode_docker_launch_authentication(spec_launch_authentication(spec)).unwrap();
 }

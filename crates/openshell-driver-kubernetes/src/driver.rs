@@ -631,7 +631,7 @@ fn spec_launch_authentication(
     spec: &openshell_core::proto::compute::v1::DriverSandboxSpec,
 ) -> LaunchAuthenticationFields<'_> {
     LaunchAuthenticationFields::new(
-        spec.typed_launch_authentication.as_deref(),
+        spec.launch_credentials.as_deref(),
         &spec.launch_authentication,
     )
 }
@@ -14830,7 +14830,7 @@ mod tests {
 #[cfg(test)]
 mod launch_authentication_fields_tests {
     use super::*;
-    use openshell_driver_sdk::legacy_contract::convert::typed_launch_authentication;
+    use openshell_driver_sdk::legacy_contract::convert::launch_credentials_from_bytes;
 
     fn encoded() -> Vec<u8> {
         let document = include_str!(
@@ -14849,14 +14849,14 @@ mod launch_authentication_fields_tests {
 
     #[test]
     fn typed_only_from_a_newer_gateway_decodes() {
-        let typed = typed_launch_authentication(&encoded()).unwrap().unwrap();
+        let typed = launch_credentials_from_bytes(&encoded()).unwrap().unwrap();
         decode_launch_authentication(LaunchAuthenticationFields::new(Some(&typed), &[])).unwrap();
     }
 
     #[test]
     fn typed_wins_when_both_are_present() {
         let encoded = encoded();
-        let mut typed = typed_launch_authentication(&encoded).unwrap().unwrap();
+        let mut typed = launch_credentials_from_bytes(&encoded).unwrap().unwrap();
         typed.gateway_id = "typed-gateway".to_string();
         let decoded =
             decode_launch_authentication(LaunchAuthenticationFields::new(Some(&typed), &encoded))

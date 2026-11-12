@@ -8,7 +8,7 @@ package openshell.compute.v1;
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "extension.proto";
-import "launch_authentication.proto";
+import "launch_credentials.proto";
 import "options.proto";
 import "sandbox.proto";
 
@@ -265,7 +265,7 @@ message DriverSandboxSpec {
   // and otherwise decodes `launch_authentication`, so an older gateway that
   // sets only the bytes keeps working. Remove the bytes field once no
   // supported gateway or driver relies on it.
-  SandboxLaunchAuthentication typed_launch_authentication = 18;
+  SandboxLaunchCredentials launch_credentials = 18;
   // Operator-selected external isolation backend. Never derived from the
   // public sandbox spec or workload environment. Omitted for the built-in
   // runtime. Requires openshell.compute.isolation-backend.
@@ -553,7 +553,7 @@ message StartSandboxRequest {
   bytes launch_authentication = 3 [(openshell.options.v1.secret) = true];
   // The same launch credentials as `launch_authentication`, typed. A driver
   // uses this field when it is set and otherwise decodes the bytes.
-  SandboxLaunchAuthentication typed_launch_authentication = 10;
+  SandboxLaunchCredentials launch_credentials = 10;
   // Stable identity of this gateway start transition. Retries of the same
   // transition carry the same generation ID; a later start uses a new ID.
   string generation_id = 4;

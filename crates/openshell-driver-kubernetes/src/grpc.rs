@@ -212,7 +212,7 @@ impl ComputeDriver for ComputeDriverService {
                         &request.sandbox_id,
                         &request.generation_id,
                         openshell_driver_sdk::legacy_contract::convert::LaunchAuthenticationFields::new(
-                            request.typed_launch_authentication.as_deref(),
+                            request.launch_credentials.as_deref(),
                             &request.launch_authentication,
                         ),
                         &request.expected_runtime_identity,

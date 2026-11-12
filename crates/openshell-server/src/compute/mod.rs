@@ -1319,7 +1319,7 @@ impl ComputeRuntime {
         // record; never let a driver derive provisioning input from mutable
         // runtime inspection output.
         let driver_sandbox = self.driver_sandbox_for_launch(sandbox)?;
-        let typed_launch_authentication = typed_launch_authentication(&launch_authentication)?;
+        let launch_credentials = launch_credentials_from_bytes(&launch_authentication)?;
         Ok(StartSandboxRequest {
             sandbox_id: sandbox.object_id().to_string(),
             name: sandbox.object_name().to_string(),
@@ -1327,7 +1327,7 @@ impl ComputeRuntime {
                 .map_err(Status::failed_precondition)?
                 .into_string(),
             launch_authentication,
-            typed_launch_authentication,
+            launch_credentials,
             expected_runtime_identity,
             isolation_backend: self.isolation_backend.clone(),
             resume: resume.is_some(),
@@ -1796,7 +1796,7 @@ impl ComputeRuntime {
         if let Some(spec) = driver_sandbox.spec.as_mut() {
             spec.await_main_process_attachment = await_main_process_attachment;
             let launch_authentication = launch_authentication.unwrap_or_default();
-            spec.typed_launch_authentication = typed_launch_authentication(&launch_authentication)?;
+            spec.launch_credentials = launch_credentials_from_bytes(&launch_authentication)?;
             spec.launch_authentication = launch_authentication;
         }
         let result = Box::pin(self.await_provisioning_operation(
@@ -2636,8 +2636,7 @@ impl ComputeRuntime {
         let recreate = if provisioning_deadline::timed_out(&previous) {
             let mut driver_sandbox = self.driver_sandbox_for_launch(&starting)?;
             if let Some(spec) = driver_sandbox.spec.as_mut() {
-                spec.typed_launch_authentication =
-                    typed_launch_authentication(&launch_authentication)?;
+                spec.launch_credentials = launch_credentials_from_bytes(&launch_authentication)?;
                 spec.launch_authentication
                     .clone_from(&launch_authentication);
             }
@@ -7274,7 +7273,7 @@ fn driver_sandbox_spec_from_public(
                 .map_or_else(String::new, |process| process.run_as_group.clone()),
         }),
         launch_authentication: Vec::new(),
-        typed_launch_authentication: None,
+        launch_credentials: None,
         isolation_backend: None,
     })
 }
@@ -8417,13 +8416,11 @@ fn next_runtime_identity(
 /// The typed form of the encoded launch authentication. The gateway fills it
 /// beside the opaque bytes so that a driver that understands the typed field
 /// uses it and an older driver keeps decoding the bytes.
-fn typed_launch_authentication(
+fn launch_credentials_from_bytes(
     encoded: &[u8],
-) -> Result<
-    Option<Box<openshell_driver_sdk::proto::compute::v1::SandboxLaunchAuthentication>>,
-    Status,
-> {
-    openshell_driver_sdk::legacy_contract::convert::typed_launch_authentication(encoded)
+) -> Result<Option<Box<openshell_driver_sdk::proto::compute::v1::SandboxLaunchCredentials>>, Status>
+{
+    openshell_driver_sdk::legacy_contract::convert::launch_credentials_from_bytes(encoded)
         .map(|typed| typed.map(Box::new))
         .map_err(|error| Status::internal(format!("encode launch authentication: {error}")))
 }
@@ -9524,7 +9521,7 @@ mod tests {
         start_requests: TestMutex<Vec<(String, String)>>,
         start_authentications: TestMutex<Vec<Vec<u8>>>,
         start_typed_authentications: TestMutex<
-            Vec<Option<openshell_driver_sdk::proto::compute::v1::SandboxLaunchAuthentication>>,
+            Vec<Option<openshell_driver_sdk::proto::compute::v1::SandboxLaunchCredentials>>,
         >,
         start_generations: TestMutex<Vec<String>>,
         start_expected_runtime_identities: TestMutex<Vec<String>>,
@@ -9728,7 +9725,7 @@ mod tests {
 
         fn start_typed_authentications(
             &self,
-        ) -> Vec<Option<openshell_driver_sdk::proto::compute::v1::SandboxLaunchAuthentication>>
+        ) -> Vec<Option<openshell_driver_sdk::proto::compute::v1::SandboxLaunchCredentials>>
         {
             self.start_typed_authentications
                 .lock()
@@ -9950,7 +9947,7 @@ mod tests {
             self.start_typed_authentications
                 .lock()
                 .expect("start typed authentications lock poisoned")
-                .push(request.typed_launch_authentication.map(|typed| *typed));
+                .push(request.launch_credentials.map(|typed| *typed));
             self.start_expected_runtime_identities
                 .lock()
                 .expect("start expected runtime identities lock poisoned")
@@ -10170,9 +10167,9 @@ mod tests {
                     .spec
                     .as_ref()
                     .unwrap()
-                    .typed_launch_authentication
+                    .launch_credentials
                     .as_ref(),
-                typed_launch_authentication(&launch_authentication)
+                launch_credentials_from_bytes(&launch_authentication)
                     .unwrap()
                     .as_ref(),
                 "the typed launch authentication is filled beside the bytes"
@@ -13956,7 +13953,7 @@ mod tests {
         for (encoded, typed) in authentications.iter().zip(&typed) {
             assert_eq!(
                 typed.as_ref(),
-                typed_launch_authentication(encoded).unwrap().as_deref(),
+                launch_credentials_from_bytes(encoded).unwrap().as_deref(),
                 "the start request carries the typed form beside the bytes"
             );
             assert!(typed.is_some());
@@ -19017,7 +19014,7 @@ endpoint = { kind = "unix", socket_path = "/run/agent-substrate/isolation.sock" 
             sandbox_id: "sandbox-id".into(),
             name: "sandbox-name".into(),
             launch_authentication: b"opaque-auth".to_vec(),
-            typed_launch_authentication: None,
+            launch_credentials: None,
             generation_id: "generation-id".into(),
             expected_runtime_identity: String::new(),
             isolation_backend: None,

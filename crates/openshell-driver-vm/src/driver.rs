@@ -2425,8 +2425,8 @@ impl VmDriver {
         sandbox_name: &str,
         generation_id: &str,
         launch_authentication: Vec<u8>,
-        typed_launch_authentication: Option<
-            openshell_driver_sdk::proto::compute::v1::SandboxLaunchAuthentication,
+        launch_credentials: Option<
+            openshell_driver_sdk::proto::compute::v1::SandboxLaunchCredentials,
         >,
     ) -> Result<(), Status> {
         if !sandbox_id.is_empty() {
@@ -2469,7 +2469,7 @@ impl VmDriver {
                     active_generation.trim()
                 )));
             }
-            if launch_authentication.is_empty() && typed_launch_authentication.is_none() {
+            if launch_authentication.is_empty() && launch_credentials.is_none() {
                 return Ok(());
             }
         }
@@ -2477,7 +2477,7 @@ impl VmDriver {
         // previous generation's credentials. Preserve the empty idempotent
         // replay above, which does not request a new launch.
         decode_launch_authentication(LaunchAuthenticationFields::new(
-            typed_launch_authentication.as_ref(),
+            launch_credentials.as_ref(),
             &launch_authentication,
         ))?;
         let mut sandbox = read_sandbox_request(&state_dir.join(SANDBOX_REQUEST_FILE))
@@ -2512,7 +2512,7 @@ impl VmDriver {
             .as_mut()
             .ok_or_else(|| Status::failed_precondition("persisted VM sandbox spec is missing"))?;
         spec.launch_authentication = launch_authentication;
-        spec.typed_launch_authentication = typed_launch_authentication.map(Box::new);
+        spec.launch_credentials = launch_credentials.map(Box::new);
         write_sandbox_request(&state_dir, &sandbox)
             .await
             .map_err(|error| {
@@ -5420,7 +5420,7 @@ impl ComputeDriver for VmDriver {
             &request.name,
             &request.generation_id,
             request.launch_authentication,
-            request.typed_launch_authentication.map(|typed| *typed),
+            request.launch_credentials.map(|typed| *typed),
         )
         .await?;
         Ok(Response::new(StartSandboxResponse::default()))
@@ -5528,7 +5528,7 @@ fn spec_launch_authentication(
 ) -> LaunchAuthenticationFields<'_> {
     spec.map_or_else(LaunchAuthenticationFields::default, |spec| {
         LaunchAuthenticationFields::new(
-            spec.typed_launch_authentication.as_deref(),
+            spec.launch_credentials.as_deref(),
             &spec.launch_authentication,
         )
     })
@@ -14972,7 +14972,7 @@ while :; do sleep 0.05; done"#,
 #[cfg(test)]
 mod launch_authentication_fields_tests {
     use super::*;
-    use openshell_driver_sdk::legacy_contract::convert::typed_launch_authentication;
+    use openshell_driver_sdk::legacy_contract::convert::launch_credentials_from_bytes;
 
     fn encoded() -> Vec<u8> {
         tests::test_launch_authentication("fields").0
@@ -14986,14 +14986,14 @@ mod launch_authentication_fields_tests {
 
     #[test]
     fn typed_only_from_a_newer_gateway_decodes() {
-        let typed = typed_launch_authentication(&encoded()).unwrap().unwrap();
+        let typed = launch_credentials_from_bytes(&encoded()).unwrap().unwrap();
         decode_launch_authentication(LaunchAuthenticationFields::new(Some(&typed), &[])).unwrap();
     }
 
     #[test]
     fn typed_wins_when_both_are_present() {
         let encoded = encoded();
-        let mut typed = typed_launch_authentication(&encoded).unwrap().unwrap();
+        let mut typed = launch_credentials_from_bytes(&encoded).unwrap().unwrap();
         typed.gateway_id = "typed-gateway".to_string();
         let decoded =
             decode_launch_authentication(LaunchAuthenticationFields::new(Some(&typed), &encoded))
@@ -15006,7 +15006,7 @@ mod launch_authentication_fields_tests {
         let missing =
             decode_launch_authentication(LaunchAuthenticationFields::default()).unwrap_err();
         assert!(missing.message().contains("is required"));
-        let mut typed = typed_launch_authentication(&encoded()).unwrap().unwrap();
+        let mut typed = launch_credentials_from_bytes(&encoded()).unwrap().unwrap();
         typed.verification_keys.clear();
         let invalid =
             decode_launch_authentication(LaunchAuthenticationFields::new(Some(&typed), &[]))

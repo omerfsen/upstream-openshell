@@ -3498,7 +3498,7 @@ impl ComputeDriver for DockerComputeDriver {
             &request.name,
             &request.generation_id,
             LaunchAuthenticationFields::new(
-                request.typed_launch_authentication.as_deref(),
+                request.launch_credentials.as_deref(),
                 &request.launch_authentication,
             ),
             request.sandbox.as_ref(),
@@ -4679,7 +4679,7 @@ async fn stage_docker_sandbox_bundle(
 /// set it, with the opaque bytes it falls back to for an older gateway.
 fn spec_launch_authentication(spec: &DriverSandboxSpec) -> LaunchAuthenticationFields<'_> {
     LaunchAuthenticationFields::new(
-        spec.typed_launch_authentication.as_deref(),
+        spec.launch_credentials.as_deref(),
         &spec.launch_authentication,
     )
 }

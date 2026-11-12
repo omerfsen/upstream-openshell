@@ -11,10 +11,13 @@ import "options.proto";
 // EXPERIMENTAL: This contract is under active development. Its API and wire
 // format may change incompatibly before stabilization.
 //
-// Language-neutral specification of the documents a compute driver receives
-// from the gateway or hands to the supervisor and the sandbox boundary, besides
-// the ComputeDriver gRPC service in compute_driver.proto. A driver in any
-// language and repository builds these documents from this file alone.
+// Language-neutral specification of what a compute driver produces for the
+// supervisor and the sandbox boundary, besides the ComputeDriver gRPC service in
+// compute_driver.proto: the runtime descriptor, the boundary configuration, and
+// the endpoint, transport, TLS and gateway trust messages they contain. The
+// credentials the gateway hands to the driver are defined in
+// launch_credentials.proto. A driver in any language and repository builds these
+// documents from this file alone.
 //
 // Encoding. A document stored in a file or carried as an opaque `bytes` field
 // is the canonical protobuf JSON mapping of its message, encoded as UTF-8
@@ -37,13 +40,11 @@ import "options.proto";
 // identity, evidence and claim messages are the existing ones from
 // compute_driver.proto, not redefinitions.
 //
-// Producers and validators. The gateway produces SandboxLaunchAuthentication
-// (defined in launch_authentication.proto, package openshell.compute.v1)
-// and the compute driver validates it. The driver produces the runtime
-// descriptor and the boundary configuration, and stages the supervisor auth
-// bundle it received. The supervisor validates the descriptor and the bundle;
-// the sandbox boundary validates BoundaryConfig. A validator never repairs a
-// document.
+// Producers and validators. The driver produces the runtime descriptor and the
+// boundary configuration, and stages the supervisor auth bundle it received from
+// the gateway (SupervisorAuthBundle, in launch_credentials.proto). The
+// supervisor validates the descriptor and the bundle; the sandbox boundary
+// validates BoundaryConfig. A validator never repairs a document.
 //
 // Platform neutrality. Paths are native to the side that reads them and are
 // never interpreted by the other side. Nothing here assumes a Linux container,

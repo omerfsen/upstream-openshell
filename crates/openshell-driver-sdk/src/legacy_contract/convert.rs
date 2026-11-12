@@ -683,7 +683,7 @@ impl TryFrom<compute::SupervisorAuthBundle> for SupervisorAuthBundle {
     }
 }
 
-impl From<&SandboxLaunchAuthentication> for compute::SandboxLaunchAuthentication {
+impl From<&SandboxLaunchAuthentication> for compute::SandboxLaunchCredentials {
     fn from(authentication: &SandboxLaunchAuthentication) -> Self {
         let mut supervisor: compute::SupervisorAuthBundle = (&authentication.supervisor).into();
         // The version belongs to the enclosing document.
@@ -704,10 +704,10 @@ impl From<&SandboxLaunchAuthentication> for compute::SandboxLaunchAuthentication
     }
 }
 
-impl TryFrom<compute::SandboxLaunchAuthentication> for SandboxLaunchAuthentication {
+impl TryFrom<compute::SandboxLaunchCredentials> for SandboxLaunchAuthentication {
     type Error = ContractConversionError;
 
-    fn try_from(value: compute::SandboxLaunchAuthentication) -> Result<Self> {
+    fn try_from(value: compute::SandboxLaunchCredentials) -> Result<Self> {
         check_version(&value.contract_version, true)?;
         let authentication = Self {
             supervisor: value
@@ -740,9 +740,9 @@ impl TryFrom<compute::SandboxLaunchAuthentication> for SandboxLaunchAuthenticati
 /// # Errors
 ///
 /// Returns an error when `encoded` is not a valid launch authentication.
-pub fn typed_launch_authentication(
+pub fn launch_credentials_from_bytes(
     encoded: &[u8],
-) -> Result<Option<compute::SandboxLaunchAuthentication>> {
+) -> Result<Option<compute::SandboxLaunchCredentials>> {
     if encoded.is_empty() {
         return Ok(None);
     }
@@ -762,7 +762,7 @@ pub fn typed_launch_authentication(
 /// Returns an error when the field that is used is not a valid launch
 /// authentication. A set typed field is never bypassed for the bytes.
 pub fn resolve_launch_authentication(
-    typed: Option<&compute::SandboxLaunchAuthentication>,
+    typed: Option<&compute::SandboxLaunchCredentials>,
     encoded: &[u8],
 ) -> Result<Option<SandboxLaunchAuthentication>> {
     if let Some(typed) = typed {
@@ -783,13 +783,13 @@ pub fn resolve_launch_authentication(
 /// message newer gateways fill, and the JSON bytes every gateway has sent.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LaunchAuthenticationFields<'a> {
-    pub typed: Option<&'a compute::SandboxLaunchAuthentication>,
+    pub typed: Option<&'a compute::SandboxLaunchCredentials>,
     pub encoded: &'a [u8],
 }
 
 impl<'a> LaunchAuthenticationFields<'a> {
     #[must_use]
-    pub fn new(typed: Option<&'a compute::SandboxLaunchAuthentication>, encoded: &'a [u8]) -> Self {
+    pub fn new(typed: Option<&'a compute::SandboxLaunchCredentials>, encoded: &'a [u8]) -> Self {
         Self { typed, encoded }
     }
 

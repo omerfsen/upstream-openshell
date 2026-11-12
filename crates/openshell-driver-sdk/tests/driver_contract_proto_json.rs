@@ -30,11 +30,13 @@ const PACKAGE: &str = "openshell.sandbox.runtime.v1";
 const LAUNCH_PACKAGE: &str = "openshell.compute.v1";
 
 fn qualified(document_type: &str) -> String {
-    let package = match document_type {
-        "SupervisorAuthBundle" | "SandboxLaunchAuthentication" => LAUNCH_PACKAGE,
-        _ => PACKAGE,
-    };
-    format!("{package}.{document_type}")
+    // The launch credentials message replaces the legacy launch authentication
+    // type, whose name the example files keep.
+    match document_type {
+        "SandboxLaunchAuthentication" => format!("{LAUNCH_PACKAGE}.SandboxLaunchCredentials"),
+        "SupervisorAuthBundle" => format!("{LAUNCH_PACKAGE}.{document_type}"),
+        _ => format!("{PACKAGE}.{document_type}"),
+    }
 }
 
 macro_rules! example {
@@ -88,7 +90,7 @@ fn to_proto_json(document_type: &str, legacy: &Value) -> Value {
             through::<SupervisorAuthBundle, compute::SupervisorAuthBundle>(legacy)
         }
         "SandboxLaunchAuthentication" => {
-            through::<SandboxLaunchAuthentication, compute::SandboxLaunchAuthentication>(legacy)
+            through::<SandboxLaunchAuthentication, compute::SandboxLaunchCredentials>(legacy)
         }
         other => panic!("no type registered for {other}"),
     };
@@ -132,7 +134,7 @@ fn to_legacy(document_type: &str, text: &str) -> Result<Value, String> {
             back::<SupervisorAuthBundle, compute::SupervisorAuthBundle>(&message)
         }
         "SandboxLaunchAuthentication" => {
-            back::<SandboxLaunchAuthentication, compute::SandboxLaunchAuthentication>(&message)
+            back::<SandboxLaunchAuthentication, compute::SandboxLaunchCredentials>(&message)
         }
         other => panic!("no type registered for {other}"),
     }

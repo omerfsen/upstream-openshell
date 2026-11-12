@@ -10,7 +10,7 @@ const PROTO_REL: &str = "../../proto";
 
 /// Proto files that make up the compute-driver contract. Their transitive
 /// imports are `options`, `extension`, `datamodel`, and `sandbox`; no other
-/// proto file is needed. `compute_driver.proto` imports `launch_authentication.proto`, and
+/// proto file is needed. `compute_driver.proto` imports `launch_credentials.proto`, and
 /// `sandbox_runtime.proto` imports both.
 const PROTO_FILES: &[&str] = &[
     "options.proto",
@@ -18,7 +18,7 @@ const PROTO_FILES: &[&str] = &[
     "datamodel.proto",
     "sandbox.proto",
     "compute_driver.proto",
-    "launch_authentication.proto",
+    "launch_credentials.proto",
     "sandbox_runtime.proto",
 ];
 
@@ -62,8 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut proto_config = tonic_prost_build::Config::new();
     // Keep the typed launch authentication off the stack of the gateway's and
     // drivers' lifecycle futures; it is large and rarely set.
-    proto_config.boxed(".openshell.compute.v1.DriverSandboxSpec.typed_launch_authentication");
-    proto_config.boxed(".openshell.compute.v1.StartSandboxRequest.typed_launch_authentication");
+    proto_config.boxed(".openshell.compute.v1.DriverSandboxSpec.launch_credentials");
+    proto_config.boxed(".openshell.compute.v1.StartSandboxRequest.launch_credentials");
     let proto_include = if use_vendored_protoc {
         proto_config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
         Some(protoc_bin_vendored::include_path()?)
